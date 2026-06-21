@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.log
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 数据文件（太大，不上传）
+data/daily/
+data/financial/
+data/factors/
+data/stock_list.csv
+
+# 输出文件（可重新生成）
+output/
