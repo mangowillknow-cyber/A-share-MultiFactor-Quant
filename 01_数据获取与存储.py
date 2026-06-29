@@ -72,7 +72,7 @@ def code_to_symbol(code: str) -> str:
         return f"sh{code}"
     elif code.startswith(("00", "30")):
         return f"sz{code}"
-    elif code.startswith(("4", "8", "9")):
+    elif code.startswith("92"):
         return f"bj{code}"
     else:
         return f"sz{code}"

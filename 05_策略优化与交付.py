@@ -75,7 +75,7 @@ def simple_quintile_backtest(factor_panel: pd.DataFrame,
         if date not in monthly_returns.index:
             continue
         fv = factor_panel.loc[date].dropna()
-        rv = monthly_returns.loc[date].dropna().clip(-0.99, 10)
+        rv = monthly_returns.loc[date].dropna().clip(-0.99, 2.0)
         common = fv.index.intersection(rv.index)
         if len(common) < n_groups * 2:
             continue

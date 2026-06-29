@@ -278,27 +278,30 @@ class FactorEngine:
         close = self._build_panel("close")
         monthly_close = close.resample("ME").last()
 
-        # 提取财务数据中的关键字段
+        # 提取财务数据中的关键字段（point-in-time：每月使用当时已披露的最新财报）
         fin = self.financial_data.copy()
-        fin_latest = fin.sort_values("report_date").groupby("symbol").last()
+        fin["report_date"] = pd.to_datetime(fin["report_date"])
 
-        # EPS、BPS
-        eps_dict = fin_latest["eps"].to_dict()
-        bps_dict = fin_latest["bps"].to_dict()
+        # 为每只股票构建财务数据时间序列，按披露日期前向填充
+        def build_fin_panel(field, close_index):
+            panels = {}
+            for sym in close.columns:
+                sym_fin = fin[fin["symbol"] == sym].sort_values("report_date")
+                if sym_fin.empty or field not in sym_fin.columns:
+                    continue
+                s = sym_fin.set_index("report_date")[field].dropna()
+                s = s[~s.index.duplicated(keep="last")]
+                # 前向填充到月末日期，确保不使用未来数据
+                aligned = s.reindex(close_index, method="ffill")
+                panels[sym] = aligned
+            return pd.DataFrame(panels, index=close_index)
 
-        # 1: PE = 价格 / EPS
-        eps_panel = pd.DataFrame(
-            {sym: pd.Series(eps_dict.get(sym, np.nan), index=monthly_close.index)
-             for sym in monthly_close.columns}
-        )
+        eps_panel = build_fin_panel("eps", monthly_close.index)
+        bps_panel = build_fin_panel("bps", monthly_close.index)
         self.factors["pe"] = monthly_close / eps_panel.replace(0, np.nan)
         logger.info("  pe: 计算完成")
 
         # 2: PB = 价格 / BPS
-        bps_panel = pd.DataFrame(
-            {sym: pd.Series(bps_dict.get(sym, np.nan), index=monthly_close.index)
-             for sym in monthly_close.columns}
-        )
         self.factors["pb"] = monthly_close / bps_panel.replace(0, np.nan)
         logger.info("  pb: 计算完成")
 
@@ -330,7 +333,20 @@ class FactorEngine:
         close = self._build_panel("close")
         monthly_close = close.resample("ME").last()
         fin = self.financial_data.copy()
-        fin_latest = fin.sort_values("report_date").groupby("symbol").last()
+        fin["report_date"] = pd.to_datetime(fin["report_date"])
+
+        # point-in-time：每月使用当时已披露的最新财报
+        def build_fin_panel(field, close_index):
+            panels = {}
+            for sym in close.columns:
+                sym_fin = fin[fin["symbol"] == sym].sort_values("report_date")
+                if sym_fin.empty or field not in sym_fin.columns:
+                    continue
+                s = sym_fin.set_index("report_date")[field].dropna()
+                s = s[~s.index.duplicated(keep="last")]
+                aligned = s.reindex(close_index, method="ffill")
+                panels[sym] = aligned
+            return pd.DataFrame(panels, index=close_index)
 
         # 定义质量因子映射（使用CSV中的英文列名）
         quality_map = {
@@ -346,27 +362,15 @@ class FactorEngine:
         }
 
         for factor_key, col_name in quality_map.items():
-            if col_name in fin_latest.columns:
-                values = fin_latest[col_name].to_dict()
-                panel = pd.DataFrame(
-                    {sym: pd.Series(values.get(sym, np.nan), index=monthly_close.index)
-                     for sym in monthly_close.columns}
-                )
+            if col_name in fin.columns:
+                panel = build_fin_panel(col_name, monthly_close.index)
                 self.factors[factor_key] = panel
                 logger.info(f"  {factor_key}: 计算完成")
 
         # 10: 现金流质量 = 经营现金流 / 总资产
-        if "ocfps" in fin_latest.columns and "total_assets" in fin_latest.columns:
-            ocf = fin_latest["ocfps"].to_dict()
-            ta = fin_latest["total_assets"].to_dict()
-            ocf_panel = pd.DataFrame(
-                {sym: pd.Series(ocf.get(sym, np.nan), index=monthly_close.index)
-                 for sym in monthly_close.columns}
-            )
-            ta_panel = pd.DataFrame(
-                {sym: pd.Series(ta.get(sym, np.nan), index=monthly_close.index)
-                 for sym in monthly_close.columns}
-            )
+        if "ocfps" in fin.columns and "total_assets" in fin.columns:
+            ocf_panel = build_fin_panel("ocfps", monthly_close.index)
+            ta_panel = build_fin_panel("total_assets", monthly_close.index)
             self.factors["cashflow_quality"] = ocf_panel / ta_panel.replace(0, np.nan)
             logger.info("  cashflow_quality: 计算完成")
 
@@ -387,9 +391,9 @@ class FactorEngine:
 
         # 3: 最大回撤（过去60日）
         def max_drawdown_series(prices, window=60):
-            rolling_max = prices.rolling(window, min_periods=1).max()
+            rolling_max = prices.rolling(window, min_periods=window).max()
             drawdown = (prices - rolling_max) / rolling_max
-            return drawdown.rolling(window, min_periods=1).min()
+            return drawdown.rolling(window, min_periods=window).min()
 
         self.factors["max_drawdown_60d"] = max_drawdown_series(close, 60).resample("ME").last()
         logger.info("  max_drawdown_60d: 计算完成")
@@ -401,9 +405,11 @@ class FactorEngine:
             self.factors[f"downside_vol_{window}d"] = down_vol.resample("ME").last()
             logger.info(f"  downside_vol_{window}d: 计算完成")
 
-        # 6: 特质波动率（用收益率的峰度近似）
+        # 6: 特质波动率（收益率偏离其60日均值的残差标准差）
+        rolling_mean = ret.rolling(60).mean()
+        residual = ret - rolling_mean
         self.factors["idio_vol_60d"] = (
-            ret.rolling(60).apply(lambda x: x.kurtosis(), raw=False)
+            residual.rolling(60).std().multiply(np.sqrt(252))
             .resample("ME").last()
         )
         logger.info("  idio_vol_60d: 计算完成")
@@ -477,13 +483,17 @@ class FactorEngine:
                 self.factors[f"{fname}_neutral"] = neutralized
                 logger.info(f"  {fname}_neutral: 行业中性化完成")
         else:
-            # 无行业数据时，使用截面标准化（z-score）
+            # 无行业数据时，使用截面标准化（z-score）+ winsorize
             for fname in factor_names:
                 panel = self.factors[fname]
-                mean = panel.mean(axis=1)
-                std = panel.std(axis=1).replace(0, np.nan)
-                self.factors[f"{fname}_neutral"] = panel.sub(mean, axis=0).div(std, axis=0)
-            logger.info("  使用截面z-score标准化（无行业数据）")
+                # winsorize: 截尾处理，限制在1%/99%分位数
+                lower = panel.quantile(0.01, axis=1)
+                upper = panel.quantile(0.99, axis=1)
+                clipped = panel.clip(lower=lower, upper=upper, axis=0)
+                mean = clipped.mean(axis=1)
+                std = clipped.std(axis=1).replace(0, np.nan)
+                self.factors[f"{fname}_neutral"] = clipped.sub(mean, axis=0).div(std, axis=0)
+            logger.info("  使用截面z-score标准化+winsorize（无行业数据）")
 
     # ----------------------------------------------------------
     # 因子统计

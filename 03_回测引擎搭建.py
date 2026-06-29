@@ -268,7 +268,7 @@ class Portfolio:
             current_value = self.positions[symbol].market_value
 
         diff_value = target_value - current_value
-        shares = int(diff_value / price / 100) * 100  # 按手（100股）取整
+        shares = int(np.floor(diff_value / price / 100)) * 100  # 统一向下取整，避免卖出不足
 
         if shares != 0:
             self.order_shares(symbol, shares, price, date)
@@ -353,6 +353,8 @@ class DualMAStrategy:
         self.holding = False
 
     def __call__(self, data: DataLoader, portfolio: Portfolio, date: pd.Timestamp):
+        # 注：本策略使用当日收盘价计算均线并同时交易，存在 look-ahead bias。
+        # 实盘中应使用前一日信号决定今日开盘交易。
         short_ma = data.history(self.symbol, "close", self.short_window).mean()
         long_ma = data.history(self.symbol, "close", self.long_window).mean()
         price = data.current(self.symbol, "close")

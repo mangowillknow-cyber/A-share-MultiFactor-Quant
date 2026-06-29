@@ -204,7 +204,7 @@ class LayeredBacktest:
                 continue
 
             f_vals = factor_values[common]
-            r_vals = return_values[common].clip(-0.99, 10)  # 裁剪极端收益，避免 inf
+            r_vals = return_values[common].clip(-0.99, 2.0)  # 裁剪极端收益，上限200%
 
             # 按因子值分组
             try:
